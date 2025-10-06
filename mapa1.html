@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mapa SEFAZ - Amazonas</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    html, body { height:100%; margin:0; font-family:Arial, sans-serif; }
+    #map { height:100vh; width:100%; }
+
+    .sidebar {
+      position:absolute; top:12px; left:12px; z-index:1200;
+      width:340px; max-height:86vh; overflow:auto;
+      background:rgba(255,255,255,0.97); padding:12px;
+      border-radius:8px; box-shadow:0 6px 18px rgba(0,0,0,0.12);
+    }
+    label{ display:block; margin-top:8px; font-size:13px; }
+    input, select, textarea { width:100%; padding:6px; margin-top:4px; border-radius:4px; border:1px solid #ccc; }
+    .btn { padding:6px 10px; border-radius:6px; cursor:pointer; border:none; font-size:12px; }
+    .btn-primary { background:#1976d2; color:#fff; }
+    .btn-muted { background:#eee; color:#111; }
+    #controls { position:absolute; right:12px; top:12px; z-index:1300; display:flex; flex-direction:column; gap:6px; }
+    .municipio-label { background:rgba(255,255,255,0.95); padding:2px 6px; border-radius:4px; border:1px solid rgba(0,0,0,0.15); font-weight:600; font-size:12px; white-space:nowrap; }
+    .custom-popup { font-size:12px; line-height:1.3; padding:4px 6px; max-width:220px; }
+    .popup-row { margin:2px 0; display:flex; gap:6px; align-items:center; }
+    .popup-icon { width:20px; text-align:center; }
+    .legend { margin-top:8px; padding:6px; background:#fff; border-radius:6px; border:1px solid #eee; font-size:12px; }
+    .small { font-size:11px; color:#555; margin-top:6px; }
+  </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="controls">
+  <button id="toggleFormBtn" class="btn btn-muted">Ocultar formulário</button>
+  <button id="toggleLegendBtn" class="btn btn-muted">Ocultar legenda</button>
+  <button id="toggleLabelsBtn" class="btn btn-muted">Ocultar nomes</button>
+</div>
+
+<div id="sidebar" class="sidebar">
+  <h3>Projeto SEFAZ em Ação — Amazonas</h3>
+
+  <div id="legendPanel" class="legend">
+    <strong>Legenda</strong>
+    <div>✈️ Aéreo — linha tracejada vermelha</div>
+    <div>🚗 Terrestre — linha azul</div>
+    <div>🚤 Aquático — linha verde</div>
+  </div>
+
+  <label><strong>Município</strong></label>
+  <select id="munSelect"></select>
+
+  <label>Distância (linha reta) — km</label>
+  <input id="distanceKm" disabled />
+
+  <label>Meios de transporte</label>
+  <div style="display:flex; gap:8px; margin-top:6px;">
+    <label><input type="checkbox" id="optAereo" value="aereo"> ✈️</label>
+    <label><input type="checkbox" id="optTerrestre" value="terrestre"> 🚗</label>
+    <label><input type="checkbox" id="optAquatico" value="aquatico"> 🚤</label>
+  </div>
+
+  <label>Tempo aéreo (h)</label><input id="timeAereo" type="number" step="0.1" min="0" />
+  <label>Tempo terrestre (h)</label><input id="timeTerrestre" type="number" step="0.1" min="0" />
+  <label>Tempo aquático (h)</label><input id="timeAquatico" type="number" step="0.1" min="0" />
+  <label>Dias de barco</label><input id="diasBarco" type="number" step="1" min="0" />
+  <label>Certificados emitidos</label><input id="certificados" type="number" step="1" min="0" />
+  <label>Observações</label><textarea id="observacoes" rows="2"></textarea>
+
+  <div style="display:flex; gap:8px; margin-top:8px;">
+    <button id="saveBtn" class="btn btn-primary">Salvar</button>
+    <button id="removeRoutesBtn" class="btn btn-muted">Remover rotas</button>
+  </div>
+
+  <div class="small">* Distâncias em linha reta. Exibição simplificada.</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(async function(){
+  const MUNICIPIOS = [
+    "Manaus","Tabatinga","Boca do Acre","Eirunepé","São Gabriel da Cachoeira",
+    "Tefé","Humaitá","Lábrea","Rio Preto da Eva","Presidente Figueiredo",
+    "Coari","Maués","Parintins","Manacapuru","Itacoatiara","Manicoré",
+    "Novo Aripuanã","Apuí"
+  ];
+  const STORAGE_KEY = 'sefaz_am_data_final';
+  const colors = { aereo:'#ff4d4d', terrestre:'#1976d2', aquatico:'#2ecc71' };
+  const appData = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+
+  const map = L.map('map').setView([-3.1, -63], 5);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'© OpenStreetMap' }).addTo(map);
+
+  // Contorno do Amazonas destacado
+  const amazonasLayer = L.geoJSON(null, {
+    style: {
+      color: '#000', weight: 4, fillColor: '#fff08a', fillOpacity: 0.25
+    }
+  }).addTo(map);
+
+  fetch('https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/brazil-states.geojson')
+    .then(res => res.json())
+    .then(data => {
+      const am = data.features.find(f => f.properties.name === 'Amazonas');
+      amazonasLayer.addData(am);
+      map.fitBounds(amazonasLayer.getBounds());
+    });
+
+  const layerAereo = L.layerGroup().addTo(map);
+  const layerTerrestre = L.layerGroup().addTo(map);
+  const layerAquatico = L.layerGroup().addTo(map);
+  const layersByMode = { aereo:layerAereo, terrestre:layerTerrestre, aquatico:layerAquatico };
+  const markers = {};
+  const routeLines = {};
+  let manausCoord = null;
+  let labelsVisible = true;
+  const openPopups = {}; // ← controla os popups abertos
+
+  function saveData(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); }
+
+  function haversineKm(a,b){
+    const R=6371, toRad=v=>v*Math.PI/180;
+    const dLat=toRad(b.lat-a.lat), dLon=toRad(b.lng-a.lng);
+    const lat1=toRad(a.lat), lat2=toRad(b.lat);
+    const s=Math.sin(dLat/2)**2+Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;
+    return 2*R*Math.atan2(Math.sqrt(s),Math.sqrt(1-s));
+  }
+
+  async function geocode(name){
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(name+', Amazonas, Brasil')}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if(data && data[0]) return { lat:+data[0].lat, lng:+data[0].lon };
+    return null;
+  }
+
+  function getPopupHTML(name){
+    const d = appData[name] || {};
+    let html = `<div class="custom-popup"><b>${name}</b>`;
+    if(d.modos?.includes('aereo') && d.timeAereo)
+      html += `<div class="popup-row"><div class="popup-icon">✈️</div><div>${d.timeAereo}h</div></div>`;
+    if(d.modos?.includes('terrestre') && d.timeTerrestre)
+      html += `<div class="popup-row"><div class="popup-icon">🚗</div><div>${d.timeTerrestre}h</div></div>`;
+    if(d.modos?.includes('aquatico') && d.timeAquatico)
+      html += `<div class="popup-row"><div class="popup-icon">🚤</div><div>${d.timeAquatico}h</div></div>`;
+    if(d.diasBarco)
+      html += `<div class="popup-row"><div class="popup-icon">🚤</div><div>${d.diasBarco} dias</div></div>`;
+    if(d.certificados)
+      html += `<div class="popup-row"><div class="popup-icon">🎓</div><div>${d.certificados}</div></div>`;
+    if(d.observacoes)
+      html += `<div class="popup-row"><div class="popup-icon">📍</div><div>${d.observacoes}</div></div>`;
+    html += `</div>`;
+    return html;
+  }
+
+  function createMarker(name, coords){
+    const marker = L.marker([coords.lat, coords.lng]).addTo(map);
+    marker.bindTooltip(name, { permanent:true, direction:'center', className:'municipio-label' });
+
+    marker.on('click', () => {
+      if(openPopups[name]) {
+        map.removeLayer(openPopups[name]);
+        delete openPopups[name];
+        return;
+      }
+      const popup = L.popup({ autoClose:false, closeOnClick:false })
+        .setLatLng(coords)
+        .setContent(getPopupHTML(name))
+        .openOn(map);
+      popup.addTo(map);
+      openPopups[name] = popup;
+    });
+
+    markers[name] = { coords, marker };
+  }
+
+  function drawRoutesFor(name){
+    if(!markers[name] || !manausCoord) return;
+    const d = appData[name] || {};
+    (d.modos||[]).forEach(m => {
+      const line = L.polyline([[manausCoord.lat, manausCoord.lng],[markers[name].coords.lat, markers[name].coords.lng]], {
+        color:colors[m], weight:3, dashArray:m==='aereo'?'5,5':null
+      }).addTo(layersByMode[m]);
+      routeLines[name] = routeLines[name] || [];
+      routeLines[name].push(line);
+    });
+  }
+
+  async function init(){
+    MUNICIPIOS.forEach(n=>{
+      const o=document.createElement('option');
+      o.value=o.textContent=n;
+      munSelect.appendChild(o);
+    });
+
+    manausCoord = await geocode('Manaus') || { lat:-3.119, lng:-60.021 };
+    L.circleMarker([manausCoord.lat, manausCoord.lng], {radius:7,color:'#000',fillColor:'#ffd966',fillOpacity:1})
+      .addTo(map).bindTooltip('Manaus (capital)',{permanent:true,direction:'right',className:'municipio-label'});
+
+    for(const n of MUNICIPIOS){
+      if(n==='Manaus') continue;
+      let coords = appData[n]?.coords;
+      if(!coords){
+        coords = await geocode(n);
+        if(!coords) continue;
+        await new Promise(r=>setTimeout(r,400));
+      }
+      const dist = haversineKm(manausCoord, coords);
+      appData[n] = { ...appData[n], coords, distanceKm:dist };
+      saveData();
+      createMarker(n, coords);
+      drawRoutesFor(n);
+    }
+
+    munSelect.value = MUNICIPIOS[1];
+    fillForm(munSelect.value);
+  }
+
+  function fillForm(name){
+    const d = appData[name]||{};
+    distanceKm.value = d.distanceKm?d.distanceKm.toFixed(1)+' km':'';
+    optAereo.checked = d.modos?.includes('aereo');
+    optTerrestre.checked = d.modos?.includes('terrestre');
+    optAquatico.checked = d.modos?.includes('aquatico');
+    timeAereo.value = d.timeAereo||'';
+    timeTerrestre.value = d.timeTerrestre||'';
+    timeAquatico.value = d.timeAquatico||'';
+    diasBarco.value = d.diasBarco||'';
+    certificados.value = d.certificados||'';
+    observacoes.value = d.observacoes||'';
+  }
+
+  saveBtn.onclick = ()=>{
+    const n = munSelect.value;
+    const modos=[];
+    if(optAereo.checked) modos.push('aereo');
+    if(optTerrestre.checked) modos.push('terrestre');
+    if(optAquatico.checked) modos.push('aquatico');
+    appData[n]={...(appData[n]||{}),
+      modos,
+      timeAereo:timeAereo.value||'',
+      timeTerrestre:timeTerrestre.value||'',
+      timeAquatico:timeAquatico.value||'',
+      diasBarco:diasBarco.value||'',
+      certificados:certificados.value||'',
+      observacoes:observacoes.value||''
+    };
+    saveData();
+    drawRoutesFor(n);
+    if(openPopups[n]){
+      openPopups[n].setContent(getPopupHTML(n));
+    }
+  };
+
+  munSelect.onchange = ()=> fillForm(munSelect.value);
+
+  removeRoutesBtn.onclick = ()=>{
+    const n=munSelect.value;
+    if(routeLines[n]){
+      routeLines[n].forEach(l=>map.removeLayer(l));
+      delete routeLines[n];
+    }
+  };
+
+  toggleLabelsBtn.onclick=()=>{
+    labelsVisible=!labelsVisible;
+    Object.values(markers).forEach(m=>{
+      if(labelsVisible)m.marker.openTooltip();else m.marker.closeTooltip();
+    });
+    toggleLabelsBtn.textContent = labelsVisible?'Ocultar nomes':'Mostrar nomes';
+  };
+
+  toggleFormBtn.onclick=()=>{
+    sidebar.style.display=sidebar.style.display==='none'?'block':'none';
+    toggleFormBtn.textContent=sidebar.style.display==='none'?'Mostrar formulário':'Ocultar formulário';
+  };
+
+  toggleLegendBtn.onclick=()=>{
+    legendPanel.style.display=legendPanel.style.display==='none'?'block':'none';
+    toggleLegendBtn.textContent=legendPanel.style.display==='none'?'Mostrar legenda':'Ocultar legenda';
+  };
+
+  init();
+})();
+</script>
+</body>
+</html>
